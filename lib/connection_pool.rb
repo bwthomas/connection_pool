@@ -33,20 +33,19 @@ require 'connection_pool/timed_stack'
 class ConnectionPool
   DEFAULTS = {size: 5, timeout: 5}
 
-  def self.wrap(options, &block)
-    Wrapper.new(options, &block)
-  end
+  attr_accessor :timeout, :handle
+
+  include Enumerable
 
   def initialize(options = {}, &block)
     raise ArgumentError, 'Connection pool requires a block' unless block
 
     options = DEFAULTS.merge(options)
+    size = options.fetch(:size)
 
-    @size = options.fetch(:size)
-    @timeout = options.fetch(:timeout)
-
-    @available = TimedStack.new(@size, &block)
-    @key = :"current-#{@available.object_id}"
+    @timeout    = options.fetch(:timeout)
+    @handle     = :"current-#{self.object_id}"
+    @available  = TimedStack.new(size, &block)
   end
 
   def with(options = {})
@@ -59,11 +58,10 @@ class ConnectionPool
   end
 
   def checkout(options = {})
-    stack = ::Thread.current[@key] ||= []
+    stack = ::Thread.current[handle] ||= []
 
     if stack.empty?
-      timeout = options[:timeout] || @timeout
-      conn = @available.pop(timeout)
+      conn = @available.pop(options[:timeout] || timeout)
     else
       conn = stack.last
     end
@@ -73,7 +71,7 @@ class ConnectionPool
   end
 
   def checkin
-    stack = ::Thread.current[@key]
+    stack = ::Thread.current[handle]
     conn = stack.pop
     if stack.empty?
       @available << conn
@@ -83,6 +81,32 @@ class ConnectionPool
 
   def shutdown(&block)
     @available.shutdown(&block)
+  end
+
+  def empty?
+    @available.empty?
+  end
+
+  def length
+    @available.length
+  end
+  alias_method :size, :length
+
+  def count(*args, &block)
+    @available.count(*args, &block)
+  end
+
+  def resize(new_size, &block)
+    @available.resize new_size, &block
+  end
+  alias_method :size=, :resize
+
+  def each(&block)
+    @available.each(&block)
+  end
+
+  def self.wrap(options, &block)
+    Wrapper.new(options, &block)
   end
 
   class Wrapper < ::BasicObject
